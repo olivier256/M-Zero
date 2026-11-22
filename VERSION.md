@@ -710,3 +710,120 @@ ratés pouvait devenir négatif).
 Par CPU et par image, hors écritures FB, avec l'assembleur : 248 000
 cycles en moyenne, 277 000 au pire (259 000 et 290 000 avant).
 ```
+
+---
+
+M-Zero : mode 7 en C, démo sur un morceau de Big Blue
+
+**Ce que fait cette version** :
+- Nouveau projet, sur la base de SuperVDP (historique conservé) :
+  - gardés : le simulateur `pixel/` (seuls changent le nom de
+    l'exécutable et le titre de la fenêtre), la structure des boucles
+    Master/Slave, le banc `tools/sh2cycles` ;
+  - retirés : `supervdp/` (compose.c, merge_sh2.S...), `tools/bmp2c.c`,
+    `tools/chunli2bmp.py`, la démo de Chun-Li, `metriques.md`,
+    `tests/test_compose.c`, `tools/sh2cycles/test_merge.c`.
+- Moteur `mzero/` :
+  - `m7_types.h` : le plan de mode 7 de la SNES, carte de 128 × 128
+    tiles de 8 × 8 (un octet par case, 16 Ko), 256 tiles au plus
+    (64 octets chacune) ; le plan boucle ;
+  - `mode7.c` : `mode7_line_params` (la perspective d'une ligne :
+    s = h / dy par la table des inverses, du = s cos a, dv = s sin a,
+    point de départ ; deux DMULS.L, ni division ni appel à libgcc) et
+    `mode7_draw_line` (320 pixels : deux additions, une lecture dans la
+    carte, une dans la tile, une écriture 16 bits pour deux pixels) ;
+  - tables du sinus (1024 entrées, Q2.30) et des inverses de dy
+    (2^32 / dy, exactes), calculées sur l'hôte par `tools/mktables.c` ;
+  - `fzero.c` : Master et Slave dessinent une ligne de sol sur deux ; le
+    Master relève la caméra (COMM 3 à 7, deux lectures identiques) et la
+    publie. Au-dessus de l'horizon, la table de lignes pointe sur une
+    ligne transparente unique : le ciel (dessiné par la Mega Drive) ne
+    coûte aucune écriture ; chaque CPU ne réécrit ses entrées que si
+    l'horizon change. Plus d'interruptions (pas de SFT en mode 7) ;
+  - modèle de coûts : lignes, et défauts de cache rejoués dans un modèle
+    du cache du SH2 (`cachesim.h`, 4 Ko en 4 voies, un par CPU).
+- Registres COMM : 3 horizon, 4 et 5 position (1/8 de pixel), 6
+  orientation (65 536 par tour), 7 hauteur (1/256 de pixel).
+- Démo : un crop de 1024 × 1024 de Big Blue. `tools/crop2bmp.py` le
+  recale sur la grille des tiles d'origine (décalage (1, 3) : 110 tiles
+  au lieu de 276) et complète la dernière colonne et les 3 dernières
+  lignes, absentes de la source. Le plan, en mosaïque, forme un circuit
+  à peu près continu : `tools/trajectoire.py` en tire une boucle de
+  382 images (4 pixels par image), lue par le programme 68000 comme une
+  table. Commandes : B pause, C deux fois plus vite, Haut/Bas hauteur,
+  Gauche/Droite horizon.
+- `tools/bmp2m7.c` : BMP 8 bits 1024 × 1024 → carte, tiles et palette.
+- Banc `tools/sh2cycles` adapté : mesure `mode7.c`, vérifie l'absence
+  d'appels à libgcc, cache en 4 voies par défaut (`CACHE=ram` pour le
+  mode 2 voies + RAM) ; `make bench`.
+- Vérifié :
+  - `test_mode7` : tables ; paramètres de ligne contre la géométrie en
+    double (pas à 2/65 536 de pixel, extrémités à 0,009 pixel) ;
+    483 360 lignes dessinées au pixel près contre un rendu naïf qui lit
+    le BMP directement, 160 écritures par ligne, chaque mot une fois ;
+  - 5 scénarios du simulateur complet (départ, virage, accéléré, caméra
+    haute, horizon déplacé) identiques à la référence ;
+  - sur SH2 (banc), les empreintes des 360 images identiques à l'hôte.
+
+**Réponses aux premières questions** :
+1. Mémoire : 16 Ko de carte + 7 Ko de tiles pour la démo, 32 Ko au plus.
+2. Calcul par pixel : c'est lui le goulot, pas le cache (voir les
+   mesures).
+3. Paramètres par ligne : une table des inverses de dy suffit (dy est
+   entier, la table est exacte) ; ni DIVU ni 68000. Coût par ligne :
+   négligeable devant les 320 pixels.
+4. Master et Slave, une ligne sur deux ; le haut de l'écran à la Mega
+   Drive.
+5. Démo sur 1024 × 1024 ; le circuit entier attendra l'image d'origine
+   (celle reçue a été réduite de 8192 à 8000 pixels de large, en JPEG).
+
+**Mesures** (banc, par CPU et par image, hors écritures FB ; 80 lignes
+de sol par CPU avec l'horizon de la démo) :
+
+| Version                         | Cycles par pixel | Pire image (trajectoire) | + écritures à 3 cycles |
+|---------------------------------|------------------|--------------------------|------------------------|
+| Celle-ci (C, cache 4 voies)     | 38,2             | 1 014 477                | 2,74 images de 1/60 s  |
+| Même code, cache 2 voies + RAM  | 38,5             | 1 011 069                | 2,73                   |
+
+- 35 instructions par pixel ; défauts de cache : environ 4 % du temps
+  (13 cycles par défaut du modèle). Caméras quelconques (jusqu'à
+  160 pixels de haut, horizon jusqu'à la ligne 8) : jusqu'à 3,67 images.
+- `cost.h` étalonné : CYCLES_LINE 11 800, CYCLES_MISS 13 ; le modèle
+  reproduit le banc à -3,6 % / +3,3 %.
+- Essais, non retenus dans cette version (banc) :
+  - carte en mots (numéro de tile × 64, 32 Ko) : 36,3 cycles par pixel,
+    2,57 images (-5 %) ;
+  - demi-résolution horizontale (un texel pour deux pixels, en C) :
+    21,0 cycles par pixel affiché, 1,54 image.
+- Bus du VDP : 25 600 écritures par image (33 % du plafond) : ce ne sera
+  pas la limite.
+
+**Ce qui reste pour plus tard** :
+- tenir les 60 images/s : il faut diviser le temps par 2,7 ; à discuter
+  (assembleur, demi-résolution là où les texels sont agrandis, nombre de
+  lignes) ;
+- le circuit entier (plan plus grand que 1024 × 1024) et le mode « hors
+  du plan = tile fixe » de la SNES ;
+- l'index 0 transparent sur la console (palette), à vérifier sur un
+  émulateur 32X.
+
+Message de commit proposé :
+
+```
+M-Zero : mode 7 en C, démo sur un morceau de Big Blue
+
+Nouveau projet sur la base de SuperVDP : le simulateur pixel et le banc
+sh2cycles sont gardés, supervdp/ est remplacé par mzero/.
+
+mode7.c : perspective d'une ligne (table des inverses de dy, deux
+DMULS.L, ni division ni libgcc) et dessin de 320 pixels (carte de
+128 x 128 tiles 8 x 8, 256 tiles). fzero.c : Master et Slave dessinent
+une ligne de sol sur deux ; la caméra arrive par COMM 3 à 7 ; le ciel
+pointe sur une ligne transparente unique de la table de lignes.
+
+Démo : crop 1024 x 1024 de Big Blue recalé sur sa grille (110 tiles),
+boucle de 382 images. test_mode7 : 483 360 lignes au pixel près ; 5
+scénarios du simulateur complet identiques à la référence.
+
+Banc : 38 cycles SH2 par pixel, 2,74 images de 1/60 s ; cost.h étalonné.
+```

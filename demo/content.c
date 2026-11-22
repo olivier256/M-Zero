@@ -1,16 +1,14 @@
 /* =========================================================================
-   Démo : décor de Chun-Li (Street Fighter Alpha), deux plans.
-   - Plan A (devant) : la Muraille et le sol, 768 x 224, ciel transparent.
-   - Plan B (derrière) : les montagnes, 672 x 224.
+   Démo : un morceau de 1024 x 1024 pixels du circuit Big Blue (F-Zero,
+   Super Nintendo), recalé sur sa grille de tiles (voir
+   tools/crop2bmp.py) : 110 tiles différentes.
    ========================================================================= */
 
-#include "supervdp.h"
+#include "fzero.h"
 
-#include "demo_assets.h" /* généré par bmp2c depuis demo/assets/assets.txt */
+#include "demo_assets.h" /* généré par bmp2m7 depuis demo/assets/bigblue.bmp */
 
-const SuperVdpContent supervdp_content = {
-    .tiles = &asset_tiles,
-    .planeA = &asset_plane_a,
-    .planeB = &asset_plane_b,
+const MZeroContent mzero_content = {
+    .plane = &asset_bigblue,
     .palette = asset_palette,
 };

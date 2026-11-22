@@ -1,24 +1,21 @@
 # sh2cycles : temps SH2 du moteur, et étalonnage du modèle de coûts
 
-Le simulateur pixel exécute SuperVDP en code natif : il compte exactement
+Le simulateur pixel exécute M-Zero en code natif : il compte exactement
 les écritures dans le frame buffer, mais pas le temps des SH2. Il affiche
 donc des cycles CPU **estimés**, d'après le modèle de coûts de
-`supervdp/cost.h`. Ce banc donne à ce modèle des valeurs mesurées.
+`mzero/cost.h`. Ce banc donne à ce modèle des valeurs mesurées.
+
+Repris de SuperVDP ; seuls le programme mesuré et l'ajustement changent.
 
 ## Ce que fait le banc
 
-1. `supervdp/compose.c` est compilé **pour SH2** (`sh-elf-gcc -m2 -O2`),
-   sans les compteurs du modèle : c'est le code qui tournera sur la 32X.
-   Il est lié aux adresses de la 32X (`bench.ld`) : code, données, tiles
-   et pile en SDRAM (0600 0000h), frame buffer en 2400 0000h.
-   Par défaut avec `SUPERVDP_ASM=1`, comme sur la console : la fusion
-   passe par l'assembleur `supervdp/merge_sh2.S`, placé lui aussi en RAM
-   interne. Avant la mesure, `test_merge.c` vérifie sur SH2 que
-   l'assembleur donne exactement le résultat du C (`mergeSpan`, la
-   référence) : 591 520 cas, gardes du tampon comprises. `ASM=0` : tout
-   en C, pour comparer.
-2. Le programme (`bench.c`) compose les lignes d'un CPU pour 180 images
-   (`frames.h` : la trajectoire de la démo, et des défilements
+1. `mzero/mode7.c` est compilé **pour SH2** (`sh-elf-gcc -m2 -O2`) :
+   c'est le code qui tournera sur la 32X. Il est lié aux adresses de la
+   32X (`bench.ld`) : code, données, plan et pile en SDRAM
+   (0600 0000h), frame buffer en 2400 0000h. `run.sh` vérifie qu'il
+   n'appelle pas libgcc (division, décalage variable...).
+2. Le programme (`bench.c`) dessine les lignes de sol d'un CPU pour
+   180 images (`frames.h` : la trajectoire de la démo, et des caméras
    quelconques). Il tourne sous `qemu-sh4eb`, avec le greffon
    `sh2cycles_plugin.c` qui mesure chaque image, d'après un modèle du
    SH2 :
@@ -30,22 +27,21 @@ donc des cycles CPU **estimés**, d'après le modèle de coûts de
    - cache (lignes de 16 octets, LRU, commun aux instructions et aux
      données, écriture simultanée) : +12 cycles par défaut (une ligne
      depuis la SDRAM), +1 par écriture en SDRAM ;
-   - par défaut, le cache est en mode « 2 voies + RAM » (registre CCR du
-     SH2 ; 32X Hardware Manual, « Cache ») : 2 Ko de cache à 2 voies, et
-     2 Ko de RAM interne en C000 0000h, sans attente, où se trouve le code
-     de `compose.c` (`bench_ram.ld`). C'est la configuration que suppose
-     le moteur : le code de rendu ne subit plus aucun défaut de cache,
-     même quand les tiles lues en continu remplissent le cache. qemu
-     refusant les adresses au-delà de 2 Go, la RAM interne y est placée
-     en 5000 0000h ; le temps simulé est le même. `CACHE=4` : cache en
-     4 voies et tout en SDRAM (`bench.ld`), pour comparer ;
+   - par défaut, cache de 4 Ko en 4 voies : le mode 7 lit beaucoup de
+     données (carte et tiles, 30 Ko), il a besoin de tout le cache.
+     `CACHE=ram` : mode « 2 voies + RAM » (registre CCR), 2 Ko de cache
+     et le code de `mode7.c` dans les 2 Ko de RAM interne
+     (`bench_ram.ld`), pour comparer. qemu refusant les adresses au-delà
+     de 2 Go, la RAM interne y est placée en 5000 0000h ; le temps simulé
+     est le même ;
    - les écritures dans le frame buffer sont comptées à part (le
      simulateur leur compte 3 à 5 cycles).
    Un programme par CPU : chacun a son propre cache.
 3. Sur l'hôte, `costs.c` calcule les compteurs du modèle pour les mêmes
-   images. `fit.py` vérifie que le code SH2 dessine exactement les mêmes
-   pixels (empreintes) et écrit 17 920 mots par image, puis ajuste les
-   coûts unitaires par moindres carrés.
+   images (lignes, et défauts de cache du modèle `mzero/cachesim.h`).
+   `fit.py` vérifie que le code SH2 dessine exactement les mêmes pixels
+   (empreintes) et écrit 160 mots par ligne, puis ajuste les coûts
+   unitaires par moindres carrés.
 
 Non modélisé : le conflit entre lecture d'instruction et accès aux
 données dans le même cycle, le partage de la SDRAM avec l'autre SH2,
@@ -54,40 +50,33 @@ ceux d'un modèle, plus fin que `cost.h`, mais pas d'une 32X réelle.
 
 ## Lancer
 
-**Sur Mac** : qemu en mode utilisateur n'existe que sous Linux. Le banc
-tourne donc dans un conteneur Linux (Docker Desktop, OrbStack ou colima) :
-
-```sh
-tools/sh2cycles/docker.sh
-```
-
-La première fois, l'image est construite : chaîne `sh-elf` et qemu,
-environ 40 minutes. Ensuite, le banc prend quelques secondes. Les
-résultats sont dans `build/sh2cycles`.
-
-**Sous Linux**, directement :
+**Sous Linux**, directement (ou dans la session de Claude) :
 
 ```sh
 sudo apt install build-essential curl xz-utils libgmp-dev libmpfr-dev \
      libmpc-dev ninja-build libglib2.0-dev pkg-config python3-venv \
      python3-distlib python3-numpy flex bison texinfo
 tools/sh2cycles/build-tools.sh     # une fois : ~/opt/sh-elf et ~/opt/qemu
-tools/sh2cycles/run.sh
+tools/sh2cycles/run.sh             # ou : make bench
 ```
 
-Ubuntu fournit `gcc-sh4-linux-gnu`, mais il ne sait produire que du SH4,
-et son qemu n'a pas les greffons : d'où `build-tools.sh`. Variables :
-`PREFIX` (dossier des outils, `~/opt` par défaut), ou, une par une,
-`SH_ELF` (préfixe de la chaîne), `QEMU` et `QEMU_INCLUDE` (dossier de
-`qemu-plugin.h`).
+**Sur Mac** : qemu en mode utilisateur n'existe que sous Linux. Le banc
+tourne alors dans un conteneur Linux (Docker Desktop, OrbStack ou
+colima) : `tools/sh2cycles/docker.sh`. La première fois, l'image est
+construite (environ 40 minutes) ; ensuite, le banc prend quelques
+secondes. Les résultats sont dans `build/sh2cycles`.
 
-La même chaîne `sh-elf` servira à compiler SuperVDP pour la vraie 32X.
+Variables : `PREFIX` (dossier des outils, `~/opt` par défaut), ou, une
+par une, `SH_ELF` (préfixe de la chaîne), `QEMU` et `QEMU_INCLUDE`
+(dossier de `qemu-plugin.h`) ; `CACHE=ram` (voir plus haut).
+
+La même chaîne `sh-elf` servira à compiler M-Zero pour la vraie 32X.
 
 ## Profil : où passe le temps
 
 ```sh
 ~/opt/qemu/bin/qemu-sh4eb \
-    -plugin build/sh2cycles/libsh2cycles.so,ways=2,ram=0x50000000,profile=on \
+    -plugin build/sh2cycles/libsh2cycles.so,profile=on \
     build/sh2cycles/bench_master.elf >/dev/null 2>profil.txt
 ```
 

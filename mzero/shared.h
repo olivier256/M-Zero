@@ -3,12 +3,14 @@
 
 #include <stdint.h>
 
+#include "mode7.h"
+
 /* =========================================================================
    Ce que se partagent les trois processeurs.
 
    1. Registres COMM (pixel/interface.h) : 8 mots visibles du 68000 et des
-      deux SH2, sans cache. SuperVDP s'en sert comme des registres d'un
-      VDP : le 68000 y écrit les défilements, les SH2 dessinent.
+      deux SH2, sans cache. M-Zero s'en sert comme des registres d'un
+      VDP : le 68000 y écrit la caméra, les SH2 dessinent.
    2. La scène de l'image en cours (Scene) : relevée par le Master au
       début de l'image, lue par le Slave, en mémoire partagée (SDRAM).
    ========================================================================= */
@@ -18,21 +20,21 @@
 #define COMM_FRAME 1      /* Master -> Slave : image à dessiner (1, 2, ...) */
 #define COMM_SLAVE_DONE 2 /* Slave -> Master : dernière image terminée */
 
-/* Registres de défilement : écrits par le 68000, relevés par le Master une
-   fois par image. Valeurs signées quelconques : le plan boucle. */
-#define COMM_HSCROLL_A 4 /* colonne du plan A au bord gauche de l'écran */
-#define COMM_HSCROLL_B 5 /* colonne du plan B */
-#define COMM_VSCROLL_A 6 /* ligne du plan A en haut de l'écran */
-#define COMM_VSCROLL_B 7 /* ligne du plan B */
-/* COMM 0 et 3 : libres */
+/* La caméra : écrite par le 68000, relevée par le Master une fois par
+   image (voir mode7_view pour les formats). */
+#define COMM_HORIZON 3 /* ligne d'écran de l'horizon (signée) */
+#define COMM_CAM_X 4   /* position, 1/8 de pixel du plan */
+#define COMM_CAM_Y 5
+#define COMM_ANGLE 6  /* orientation, un tour = 65536 */
+#define COMM_HEIGHT 7 /* hauteur, 1/256 de pixel du plan */
+/* COMM 0 : libre */
 
 /* ---- Scène ---------------------------------------------------------------
    Tout ce qu'il faut pour dessiner une image : les deux CPU dessinent avec
    les mêmes valeurs, même si le 68000 les change en cours d'image. */
 
 typedef struct {
-    int16_t hScrollA, hScrollB;
-    int16_t vScrollA, vScrollB;
+    Mode7View view;
     int16_t drawBuffer; /* frame buffer dessiné : 0 ou 1 (valeur de FS
                            quand il sera affiché) */
 } Scene;

@@ -378,7 +378,7 @@ static int installInterruptHandler(void) {
 /* ==== Fenêtre ============================================================= */
 
 static int platform_init(int width, int height) {
-    _window = mfb_open("SuperVDP", width, height);
+    _window = mfb_open("M-Zero", width, height);
 
     if (_window == NULL)
         return 0;

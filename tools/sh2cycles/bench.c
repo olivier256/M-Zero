@@ -1,8 +1,8 @@
 /* =========================================================================
-   Banc sh2cycles, côté SH2 : compose les lignes d'un CPU pour chaque image
-   de frames.h, avec le vrai code de supervdp/compose.c compilé pour SH2
-   (sans les compteurs du modèle), et marque chaque image pour le greffon
-   qemu qui mesure le temps (sh2cycles_plugin.c).
+   Banc sh2cycles, côté SH2 : dessine les lignes de sol d'un CPU pour
+   chaque image de frames.h, avec le vrai code de mzero/mode7.c compilé
+   pour SH2, et marque chaque image pour le greffon qemu qui mesure le
+   temps (sh2cycles_plugin.c).
 
    BENCH_FIRST_LINE : 0 pour le Master (lignes paires), 1 pour le Slave.
    Chaque CPU ayant son propre cache, on lance un programme par CPU.
@@ -12,8 +12,8 @@
    (costs.c), preuve que le code SH2 dessine juste.
    ========================================================================= */
 
-#include "compose.h"
 #include "framebuffer.h"
+#include "mode7.h"
 #include "vdp.h"
 
 #include "demo_assets.h"
@@ -29,24 +29,32 @@ volatile uint8_t bench_fb[VDP_DRAM_SIZE] __attribute__((section(".fb")));
 
 void sys_write(const char *text, int length);
 
-/* Décalage d'écran choisi pour chaque ligne (voir compose.h) */
-static uint8_t lineShift[BENCH_SCREEN_HEIGHT];
-
-static void drawFrame(const BenchFrame *f) {
-    ComposeCost cost; /* non rempli : compteurs absents sur SH2 */
-    for (int y = BENCH_FIRST_LINE; y < BENCH_SCREEN_HEIGHT; y += 2)
-        lineShift[y] = (uint8_t)compose_line(
-            fb_offset(0, y), &asset_tiles, &asset_plane_a, f->xA, f->yA + y,
-            &asset_plane_b, f->xB, f->yB + y, &cost);
+/* Les lignes de ce CPU sous l'horizon, comme drawScene (fzero.c) */
+static int firstLine(const Mode7View *view) {
+    int first = view->horizon + 1;
+    if ((first & 1) != BENCH_FIRST_LINE)
+        first++;
+    return first;
 }
 
-/* Empreinte de ce que l'écran affiche : 320 pixels par ligne, à partir
-   du pixel 'décalage' de la ligne */
-static uint32_t fingerprint(void) {
+static void drawFrame(const BenchFrame *f) {
+    Mode7View view;
+    mode7_view(&view, f->x, f->y, f->angle, f->height, f->horizon);
+    for (int y = firstLine(&view); y < BENCH_SCREEN_HEIGHT; y += 2) {
+        Mode7Line line;
+        mode7_line_params(&view, y, &line);
+        mode7_draw_line(fb_offset(0, y), &asset_bigblue, &line);
+    }
+}
+
+/* Empreinte des lignes de sol dessinées par ce CPU */
+static uint32_t fingerprint(const BenchFrame *f) {
+    Mode7View view;
+    mode7_view(&view, f->x, f->y, f->angle, f->height, f->horizon);
     uint32_t h = 2166136261u;
-    for (int y = BENCH_FIRST_LINE; y < BENCH_SCREEN_HEIGHT; y += 2)
+    for (int y = firstLine(&view); y < BENCH_SCREEN_HEIGHT; y += 2)
         for (int x = 0; x < FB_WIDTH; x++)
-            h = (h ^ bench_fb[fb_offset(x + lineShift[y], y)]) * 16777619u;
+            h = (h ^ bench_fb[fb_offset(x, y)]) * 16777619u;
     return h;
 }
 
@@ -61,7 +69,7 @@ static void printHex(uint32_t v) {
 
 int main(void) {
     /* Une image hors mesure, pour remplir le cache comme en régime établi */
-    BenchFrame warm = bench_frame(0);
+    const BenchFrame warm = bench_frame(0);
     drawFrame(&warm);
 
     for (int i = 0; i < BENCH_FRAMES; i++) {
@@ -69,7 +77,7 @@ int main(void) {
         bench_marker[0] = 1; /* début de la mesure */
         drawFrame(&f);
         bench_marker[1] = 1; /* fin */
-        printHex(fingerprint());
+        printHex(fingerprint(&f));
     }
     return 0;
 }
